@@ -1,36 +1,96 @@
-# Localink Prototype
+# 近联 Localink Prototype
 
-A React, Vite, and Material 3-inspired Android LAN connection prototype.
+React / Vite 的 Android 局域网连接交互原型，采用 Material 3 风格。开发目标见 [Issue #1](https://github.com/wmila/android-server-connection-prototype/issues/1)。
 
-## Preview
+## 运行与检查
 
-- The workbench contains 21 independently addressable scenes. Scene URLs use `#/connected`, `#/first`, `#/manual`, and the other IDs in `src/data/scenes.ts`.
-- Selecting a scene freezes that state for inspection. Buttons in the device are interactive.
-- The play control runs the connection or discovery flow. Its result selector can simulate success, timeout, discovery results, or an empty scan.
-- `?mode=app#/connected` opens an individual scene without the workbench. `?mode=app` without a hash runs normal startup.
-- The reset control restores the two included example servers. Empty-state previews do not delete saved configurations.
+使用 Node.js 24（测试依赖原生 TypeScript 类型剥离），安装和运行：
 
-## Behavior
+```sh
+npm ci
+npm run dev
+npm test
+npm run build
+```
 
-- Saved servers, the last successful server, and the automatic connection preference are persisted in browser local storage.
-- Startup connects directly to the last successful server. It never initiates discovery. With no saved configurations, startup opens the first-use screen.
-- The default server changes only after a successful connection. Failures and canceled requests retain configuration.
-- HTTP uses a simulated five-second polling cycle and a dashed status indicator. WebSocket uses a distinct live-connection indicator.
-- Retries are bounded to three attempts with a five-second wait between attempts. Cancellation clears all pending flow timers.
-- Discovery is available only in the add-server flow. Each discovered device is listed once, with both supported communication modes.
-- HTTP and WebSocket maintain separate paths. TLS is an independent preference, and protocol changes do not disable it.
-- Pasted HTTP, HTTPS, WS, and WSS addresses are parsed and previewed. Parsing a plaintext URL does not disable an already enabled TLS preference.
-- Server removal requires confirmation. Removing the last server clears the default target.
+PR 的 GitHub Actions 执行测试、TypeScript 检查和生产构建。合并到 main 后，已有 Pages 工作流发布站点；创建 PR 不会修改线上页面。
 
-## Simulation Boundary
+## 预览入口
 
-This is an interactive frontend prototype, not a native Android client. Discovery and network connections are simulated; no requests are sent to entered servers. A native implementation should use service discovery such as mDNS / DNS-SD, deduplicate by stable device identity, and then connect using the explicitly selected transport and TLS settings.
+- 工作台共 18 个场景；默认是“服务器连接”，不再有独立业务首页。
+- `?mode=app`（不带 hash）运行启动流程：自动连接已开启时，直接使用上次成功服务器；未保存服务器时显示添加入口，不自动扫描。
+- `?mode=app#/connected` 等带 hash 的链接为指定场景预览。工作台选择连接状态可加载模拟场景；页面内的连接、设置、管理按钮操作真实的原型状态。
+- 底部“连接 / 设置”切换只改变页面，不重建连接、不增加验证次数，也不停止应继续运行的轮询。
+- 旧链接 `#/home`、`#/retry-success`、`#/http-stale` 归并到正常连接页，`#/canceled` 归并为已断开；过期显示由设置决定。
+- 工作台支持成功、超时、不可达、响应格式异常、版本不兼容、HTTP 503 等模拟结果，并显示本次会话的验证次数。还可模拟过期和检测到服务端断开。
+- 空场景预览不会删除保存的配置；重置原型需要确认。
 
-## Main Files
+## 连接设置
 
-- `src/App.tsx`: routing, application state, storage, connection and discovery flows, workbench.
-- `src/components/MobileScreens.tsx`: connection, configuration, discovery, management, and home screens.
-- `src/components/MobileUI.tsx`: shared Material 3-inspired controls and status components.
-- `src/data/servers.ts`: server types, address parsing, input validation, and storage loading.
-- `src/data/scenes.ts`: scene definitions and design notes.
-- `src/index.css`: responsive workbench and device styling, state colors, and motion.
+| 设置 | 初始值 | 说明 |
+| --- | --- | --- |
+| HTTP 验证模式 | 按需验证 | 首次建立连接验证一次，成功后不后台探测 |
+| 按需模式的过期提示 | 不提示 | 无论经过多久，保持最近成功的绿色在线视觉 |
+| 过期提醒时长 | 60 秒 | 仅开启提示后显示，可输入 1–86400 的整数秒 |
+| 定时轮询间隔 | 5 秒 | 切换到轮询模式后显示，可输入 1–3600 的整数秒 |
+| 下次打开自动连接 | 开启 | 优先使用上次成功服务器，不扫描 |
+| 失败后自动重连 | 关闭 | 可开启；初次连接含首次最多尝试 3 次，已连接后的掉线最多重连 3 次 |
+| 重试等待间隔 | 5 秒 | 开启自动重连后显示，可输入 1–3600 的整数秒，与在线轮询独立 |
+
+无效时长输入会提示错误并保留原设置，离开输入框时恢复有效值。设置和服务器保存在当前浏览器，不传到服务器。
+
+### 两种按需显示偏好
+
+- **不提示，保持在线显示**：不随时间变灰，不显示过期警告、时间差或“重新测试”按钮；绿色是最近成功状态的保留，并不代表持续探测。
+- **超过指定时长后提示**：计时到期变灰，并显示“服务器状态可能已过期”和“重新测试”。到期只改变显示，不发请求、不判定离线。显式测试成功后变绿并重置计时；确认不可达时断开。测试严格只请求一次，不启动自动重试或周期轮询。
+- 修改提示开关或阈值本身不触发请求；关闭提示可清除陈旧视觉，但不会将已检测到的断开伪装成在线。
+- 后续客户端应在刷卡前再次验证在线，**本次不实现刷卡、推送卡号或其触发器**。
+- 选择定时轮询后，HTTP 每次验证完成，再等待配置间隔发起下一次验证；切回按需模式会清除计时并取消尚未完成的轮询。
+- WebSocket 不使用 HTTP 的轮询或过期设置；协议标签与 HTTP 同色，在线图标统一为绿色。
+
+### 状态与管理
+
+连接或重试成功均停留连接页。取消、主动断开、检测到服务端断开均使用断开语义，首次未连接成功保留失败状态。主动断开会取消请求及重试，不会自动接回；迟到的结果不能恢复在线。
+
+连接页保留两行服务器地址与管理入口，不再提供地址复制、修改配置或切换服务器快捷按钮。完整的编辑、删除、连接操作仍在服务器管理中。
+
+发现是本地模拟：点击结果立即保存并连接，按 HTTP 主机地址和端口去重；失败不删除新配置，成功才更新上次成功目标。手动表单按名称、IP/域名、端口输入，不解析整段粘贴地址，普通输入框可正常粘贴。
+
+保留旧版 `localink-prototype-v1` 存储键并逐项迁移：保留有效服务器、自定义端口、WebSocket 路径和上次成功记录；迁移自动连接选项，忽略已移除的加密配置及旧 HTTP 路径。空列表不会被默认示例覆盖。
+
+## AMNet HTTP API v1 与模拟边界
+
+依据用户提供的 `amnet-api-docs.html`：
+
+```http
+GET http://<实际服务器 IP 或域名>:6070/amnet/info
+Accept: application/json
+```
+
+允许自定义端口，HTTP 验证路径固定；无查询参数、无请求体。监听地址 `0.0.0.0` / `::` 不能作为客户端目标。
+
+200 JSON 验证结构：
+
+```json
+{
+  "apiVersion": 1,
+  "gameId": null,
+  "serverName": "AMNET-SERVER",
+  "sessionUptime": 120,
+  "timeSinceLastPoll": null
+}
+```
+
+检查状态码、版本和字段类型。`gameId` 为四位大写 ASCII 字母或 null，`serverName` 不超过 16 字符，两个秒数字段为非负整数（`timeSinceLastPoll` 可为 null）。`timeSinceLastPoll` 是游戏轮询时间，不是客户端验证时刻；null 不是离线，0 也不是刷卡成功。
+
+**这是前端模拟，不发送真实局域网请求。** AMNet 文档未提供 WebSocket 或自动发现协议，保留的相应界面只是独立交互演示，不虚构接口。`POST /amnet/signin` 不用于验证，也不在本次实现范围。
+
+## 代码与测试
+
+- `src/connection/ConnectionController.ts`：独立于路由的状态、取消、轮询、过期和有界重试，可注入时钟测试。
+- `src/connection/amnet.ts`：请求描述、API 响应校验与可取消的模拟传输。
+- `src/components/SettingsScreen.tsx`：验证模式、层级提示选项、时长校验与自动连接/重连。
+- `src/components/MobileScreens.tsx`、`MobileUI.tsx`：连接、发现、表单、服务器管理及共享组件。
+- `src/App.tsx`：路由、持久化和工作台，不以页面生命周期管理连接。
+- `src/data/servers.ts`、`scenes.ts`：数据迁移、参数校验、场景与旧链接归并。
+- `tests/*.test.ts`：无后台探测、切换策略、过期显示、取消竞态、失败重试、协议校验、迁移及发现去重测试。
