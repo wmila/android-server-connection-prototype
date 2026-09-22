@@ -4,8 +4,8 @@ export type SceneId =
   | 'connected' | 'ws-connected' | 'auto' | 'connecting' | 'failed'
   | 'retrying' | 'retry-wait' | 'disconnected' | 'first' | 'scanning'
   | 'scan' | 'scan-empty' | 'manual' | 'edit' | 'unconfigured'
-  | 'manage' | 'manage-empty' | 'settings';
-export type SceneGroup = 'connection' | 'configuration' | 'management' | 'settings';
+  | 'manage' | 'manage-empty' | 'settings' | 'reader' | 'wallet';
+export type SceneGroup = 'reader' | 'connection' | 'configuration' | 'management' | 'settings';
 interface Scene {
   id: SceneId; label: string; title: string; description: string;
   group: SceneGroup; icon: IconName; notes: { title: string; text: string }[];
@@ -14,8 +14,17 @@ function scene(id: SceneId, label: string, group: SceneGroup, icon: IconName, de
   return { id, label, title: label, group, icon, description, notes: notes.map(([title, text]) => ({ title, text })) };
 }
 export const SCENES: Scene[] = [
+  scene('reader', '刷卡', 'reader', 'scan', '本地刷卡设计，复用统一连接状态。', [
+    ['按规则发送', '读取 Access Code、统一固定或逐卡绑定；手动发送不受映射改写。'],
+    ['可控模拟', '先在连接页连接服务器，再模拟贴卡；一次贴卡最多发送一次，需移开后再次读取。'],
+    ['结果准确', '202 只表示接收，429 表示忙碌，超时结果未知，不自动重发。'],
+  ]),
+  scene('wallet', '卡包', 'reader', 'layers', '保存常用身份，管理实体卡绑定。', [
+    ['离线可管理', '录入和绑定本身不发送；服务器断开不影响卡包管理。'],
+    ['本机保存', '数据与连接配置分别保存；删除目标同步清理所有服务器的引用。'],
+  ]),
   scene('connected', '连接成功 · HTTP', 'connection', 'checkCircle', '连接页就是首页，按你的偏好保持连接。', [
-    ['按需验证', '默认首次连接时验证一次，成功后不再后台探测。后续刷卡前再次验证，刷卡不在本原型范围。'],
+    ['按需验证', '默认首次连接时验证一次，成功后不再后台探测。刷卡或卡包发送前再次验证，均为本地模拟。'],
     ['由你决定是否提醒', '设置中可选择一直显示绿色在线，或超出自定义时长后变灰并提示。'],
     ['一次主动测试', '开启过期提示后才出现重新测试。过期本身不会发送请求。'],
   ]),
@@ -90,6 +99,7 @@ export const SCENES: Scene[] = [
   ]),
 ];
 export const GROUPS: { id: SceneGroup; title: string; english: string; icon: IconName; subtitle: string }[] = [
+  { id: 'reader', title: '刷卡与卡包', icon: 'scan', english: 'READER & WALLET', subtitle: '读取、保存与发送' },
   { id: 'connection', title: '日常连接', english: 'DAILY CONNECTION', icon: 'link', subtitle: '从上次成功的连接，继续。' },
   { id: 'configuration', title: '添加与配置', english: 'SERVER CONFIGURATION', icon: 'settings', subtitle: '找到你的设备，直接连接。' },
   { id: 'management', title: '服务器管理', english: 'YOUR SERVERS', icon: 'server', subtitle: '每一台熟悉的设备，都在这里。' },

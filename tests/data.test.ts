@@ -91,7 +91,9 @@ test('old links normalize to canonical connection states; deleted scenes are not
   assert.equal(resolveScene('#/unknown', 'unconfigured'), 'unconfigured');
   assert.equal(resolveScene('#/constructor'), 'connected');
   assert.equal(resolveScene('#/__proto__'), 'connected');
-  assert.equal(SCENES.length, 18);
+  assert.equal(SCENES.length, 20);
+  assert.equal(resolveScene('#/reader'), 'reader');
+  assert.equal(resolveScene('#/wallet'), 'wallet');
   assert.equal(new Set(SCENES.map(s => s.id)).size, SCENES.length);
 });
 test('simulated transport immediately honors already canceled requests', async () => {
