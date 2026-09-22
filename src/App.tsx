@@ -7,6 +7,9 @@ import { SettingsScreen } from './components/SettingsScreen';
 import { GROUPS, SCENES, readScene, type SceneGroup, type SceneId } from './data/scenes';
 import { BLANK_FORM, SAMPLE_SERVERS, STORAGE_KEY, addDiscoveredServer, createInitialState, readSavedState, toForm, validateForm, type DISCOVERED_SERVERS, type FormErrors, type Preferences, type ServerConfig, type ServerForm } from './data/servers';
 import { ConnectionController, type ConnectionStatus } from './connection/ConnectionController';
+import { ReaderModule } from './reader/ReaderModule';
+import { ReaderStore, loadWallet, simulateSubmit, type SubmitOutcome } from './reader/ReaderStore';
+import { WALLET_KEY } from './reader/model';
 import { infoRequest, simulateVerification, type SimulationOutcome } from './connection/amnet';
 
 const CONNECTION_SCENES: SceneId[] = ['connected', 'ws-connected', 'auto', 'connecting', 'failed', 'retrying', 'retry-wait', 'disconnected'];
@@ -19,6 +22,9 @@ function Brand() {
 export default function App() {
   const [saved, setSaved] = useState(readSavedState);
   const [page, setPage] = useState<SceneId>(() => readScene(saved.servers.length ? 'connected' : 'unconfigured'));
+  const [submitOutcome, setSubmitOutcome] = useState<SubmitOutcome>('accepted');
+  const submitOutcomeRef = useRef(submitOutcome); submitOutcomeRef.current = submitOutcome;
+  const [readingFixture, setReadingFixture] = useState<'success' | 'identifier-only' | 'failed' | 'unknown'>('success');
   const [connectionOutcome, setConnectionOutcome] = useState<SimulationOutcome>('success');
   const outcomeRef = useRef(connectionOutcome);
   outcomeRef.current = connectionOutcome;
@@ -30,6 +36,8 @@ export default function App() {
       lastSuccessId: server.id,
     })),
   ));
+  const [readerStore] = useState(() => new ReaderStore(controller, () => simulateSubmit(submitOutcomeRef.current), loadWallet(), data => localStorage.setItem(WALLET_KEY, JSON.stringify(data))));
+  useEffect(() => { readerStore.start(); return () => readerStore.dispose(); }, [readerStore]);
   const connection = useSyncExternalStore(controller.subscribe, controller.getSnapshot);
   const activeServer = connection.server || saved.servers.find(server => server.id === saved.lastSuccessId) || saved.servers[0] || SAMPLE_SERVERS[0];
   const currentId = connection.status === 'connected' ? connection.server?.id || null : null;
@@ -47,7 +55,7 @@ export default function App() {
   const [workbenchDialog, setWorkbenchDialog] = useState<'about' | 'reset' | null>(null);
   const [focusMode, setFocusMode] = useState(() => new URLSearchParams(window.location.search).get('mode') === 'app');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [expanded, setExpanded] = useState<Record<SceneGroup, boolean>>({ connection: true, configuration: false, management: true, settings: true });
+  const [expanded, setExpanded] = useState<Record<SceneGroup, boolean>>({ reader: true, connection: true, configuration: false, management: true, settings: true });
   const [viewportHeight, setViewportHeight] = useState(window.innerHeight);
   const [storageAvailable, setStorageAvailable] = useState(true);
   const scanTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -72,6 +80,7 @@ export default function App() {
     toastTimer.current = setTimeout(() => setToast(''), 3400);
   }
   function navigate(next: SceneId, preserveScan = false) {
+    readerStore.cancelPending();
     if (!preserveScan) stopScan();
     setPage(next);
     setMobileNavOpen(false);
@@ -206,12 +215,13 @@ export default function App() {
     const nextDefault = saved.lastSuccessId === deleteTarget.id ? [...remaining].filter(server => server.lastSuccess).sort((a, b) => (b.lastSuccess || 0) - (a.lastSuccess || 0))[0]?.id || null : saved.lastSuccessId;
     setSaved(previous => ({ ...previous, servers: remaining, lastSuccessId: nextDefault }));
     if (connection.server?.id === deleteTarget.id) {
-      controller.preview(remaining[0] || SAMPLE_SERVERS[0], 'disconnected');
+      if (remaining.length) controller.preview(remaining[0], 'disconnected');
+      else controller.clearServer();
     }
     setDeleteTarget(null); navigate(remaining.length ? 'manage' : 'manage-empty'); showToast('服务器已从本地移除');
   }
   function resetPrototype() {
-    stopScan();
+    stopScan(); readerStore.reset();
     const initial = createInitialState();
     setSaved(initial); controller.setPreferences(initial.preferences); controller.preview(SAMPLE_SERVERS[0], 'connected');
     setForm({ ...BLANK_FORM }); setErrors({}); setConnectionOutcome('success'); setScanOutcome('found');
@@ -228,7 +238,7 @@ export default function App() {
     if (isDiscovery) { beginScan(); return; }
     if (isForm) { saveForm(true); return; }
     if (scene === 'unconfigured' || scene === 'manage-empty') { openAdd(); return; }
-    if (scene === 'settings') { viewConnection(); return; }
+    if (scene === 'settings' || scene === 'reader' || scene === 'wallet') { viewConnection(); return; }
     startConnection(activeServer, scene === 'auto');
   }
   const initialView = useRef({ scene: page, startup: focusMode && !window.location.hash });
@@ -248,11 +258,11 @@ export default function App() {
     return () => { mounted = false; controller.dispose(); clearTimeout(scanTimer.current); clearTimeout(toastTimer.current); };
   }, []);
 
-  const quickScenes: SceneId[] = currentScene.group === 'configuration' ? ['first', 'scan', 'manual']
+  const quickScenes: SceneId[] = currentScene.group === 'reader' ? ['reader', 'wallet', 'connected'] : currentScene.group === 'configuration' ? ['first', 'scan', 'manual']
     : currentScene.group === 'management' ? ['manage', 'manage-empty']
       : ['connected', 'disconnected', 'settings'];
-  const demoLabel = isDiscovery ? '演示设备发现' : isForm ? '验证并连接' : scene === 'settings' ? '返回连接页' : scene === 'unconfigured' || scene === 'manage-empty' ? '开始添加设备' : '播放连接流程';
-  const toolbarTitle = isDiscovery || isForm ? '服务器设置' : isManage ? '服务器管理' : scene === 'settings' ? '设置' : '连接';
+  const demoLabel = isDiscovery ? '演示设备发现' : isForm ? '验证并连接' : ['settings', 'reader', 'wallet'].includes(scene) ? '返回连接页' : scene === 'unconfigured' || scene === 'manage-empty' ? '开始添加设备' : '播放连接流程';
+  const toolbarTitle = isDiscovery || isForm ? '服务器设置' : isManage ? '服务器管理' : scene === 'settings' ? '设置' : scene === 'reader' ? '刷卡' : scene === 'wallet' ? '卡包' : '连接';
 
   return <MotionConfig reducedMotion="user"><div className={`workbench ${focusMode ? 'focus-mode' : ''}`}>
     {mobileNavOpen && <button className="sidebar-scrim" aria-label="关闭场景导航" onClick={() => setMobileNavOpen(false)} />}
@@ -282,10 +292,11 @@ export default function App() {
                 <div className="mobile-display"><div className="android-statusbar"><span>9:41</span><div><Icon name="signal" size={13} strokeWidth={2.6} /><Icon name="wifi" size={13} strokeWidth={2.6} /><span className="android-battery"><span /></span></div></div>
                   <div className="mobile-toolbar"><div>{(isDiscovery || isForm || isManage) && <button className="mobile-icon-button" aria-label="返回上一页" onClick={goBack}><Icon name="arrowLeft" size={19} /></button>}<span>{toolbarTitle}</span></div><button className="mobile-icon-button toolbar-servers" aria-label="管理服务器" title="管理服务器" onClick={() => navigate(saved.servers.length ? 'manage' : 'manage-empty')}><Icon name="server" size={20} /></button></div>
                   <div className="mobile-scroll" ref={mobileScrollRef}><AnimatePresence mode="wait" initial={false}><motion.div className="mobile-page" key={scene} initial={{ opacity: 0, x: 7 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -5 }} transition={{ duration: .16, ease: 'easeOut' }}>
-                    {isDiscovery ? <DiscoveryScreen scene={scene} addingAdditional={addingAdditional} onScan={beginScan} onCancel={() => navigate('first')} onManual={() => { setForm({ ...BLANK_FORM }); setEditTargetId(null); setErrors({}); navigate('manual'); }} onSelect={selectDiscovered} />
+                    {(scene === 'reader' || scene === 'wallet') ? <ReaderModule page={scene} store={readerStore} connection={connection} serverId={connection.server?.id ?? saved.lastSuccessId} onConnect={viewConnection} onWallet={() => navigate('wallet')} fixture={readingFixture} />
+                      : isDiscovery ? <DiscoveryScreen scene={scene} addingAdditional={addingAdditional} onScan={beginScan} onCancel={() => navigate('first')} onManual={() => { setForm({ ...BLANK_FORM }); setEditTargetId(null); setErrors({}); navigate('manual'); }} onSelect={selectDiscovered} />
                       : isForm ? <ServerFormScreen editing={scene === 'edit'} form={form} errors={errors} onChange={patch => { setForm(previous => ({ ...previous, ...patch })); setErrors({}); }} onDiscover={() => navigate('first')} onSave={saveForm} />
                         : isManage ? <ManageScreen servers={saved.servers} empty={scene === 'manage-empty'} currentId={currentId} lastSuccessId={saved.lastSuccessId} onConnect={startConnection} onEdit={openEdit} onDelete={setDeleteTarget} onAdd={openAdd} onView={viewConnection} />
-                          : scene === 'settings' ? <SettingsScreen preferences={saved.preferences} onChange={changePreferences} />
+                          : scene === 'settings' ? <><ReaderModule page="settings" store={readerStore} connection={connection} serverId={connection.server?.id ?? saved.lastSuccessId} onConnect={viewConnection} onWallet={() => navigate('wallet')} fixture={readingFixture} /><SettingsScreen preferences={saved.preferences} onChange={changePreferences} /></>
                             : <ConnectionScreen scene={scene} server={activeServer} lastSuccessId={saved.lastSuccessId} serverCount={saved.servers.length} connection={connection} actions={{
                               reconnect: () => startConnection(activeServer),
                               cancel: () => { controller.disconnect(); showToast('连接已断开，配置已保留'); },
@@ -295,7 +306,9 @@ export default function App() {
                             }} />}
                   </motion.div></AnimatePresence></div>
                   <nav className="bottom-navigation" aria-label="应用导航">
-                    <button aria-current={scene !== 'settings' ? 'page' : undefined} onClick={viewConnection}><span><Icon name="link" size={21} /></span>连接</button>
+                    <button aria-current={scene === 'reader' ? 'page' : undefined} onClick={() => navigate('reader')}><span><Icon name="scan" size={21} /></span>刷卡</button>
+                    <button aria-current={scene === 'wallet' ? 'page' : undefined} onClick={() => navigate('wallet')}><span><Icon name="layers" size={21} /></span>卡包</button>
+                    <button aria-current={!['reader', 'wallet', 'settings'].includes(scene) ? 'page' : undefined} onClick={viewConnection}><span><Icon name="link" size={21} /></span>连接</button>
                     <button aria-current={scene === 'settings' ? 'page' : undefined} onClick={() => navigate('settings')}><span><Icon name="settings" size={21} /></span>设置</button>
                   </nav><div className="android-navigation"><span /></div>
                   <AnimatePresence>{toast && <motion.div key="toast" className="mobile-toast" role="status" initial={{ opacity: 0, y: 15 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }}><span>{toast}</span><button aria-label="关闭提示" onClick={() => setToast('')}><Icon name="close" size={14} /></button></motion.div>}</AnimatePresence>
@@ -311,8 +324,10 @@ export default function App() {
             {currentScene.group === 'connection' && <div className="preview-protocol"><div><span>通信方式</span><span>切换预览</span></div><div className="desktop-segmented"><button className={activeServer.mode === 'http' ? 'selected' : ''} onClick={() => selectScene('connected')} aria-pressed={activeServer.mode === 'http'}>{activeServer.mode === 'http' && <Icon name="check" size={13} />}HTTP</button><button className={activeServer.mode === 'ws' ? 'selected' : ''} onClick={() => selectScene('ws-connected')} aria-pressed={activeServer.mode === 'ws'}>{activeServer.mode === 'ws' && <Icon name="check" size={13} />}WebSocket</button></div></div>}
             <div className="design-notes" aria-label="设计说明">{currentScene.notes.map((note, index) => <div className="design-note" key={note.title}><span>{(index + 1).toString().padStart(2, '0')}</span><div><h4>{note.title}</h4><p>{note.text}</p></div></div>)}</div>
             <div className="quick-states"><div className="inspector-section-heading"><h3>{currentScene.group === 'connection' ? '更多连接状态' : '相关场景'}</h3><span>独立预览</span></div>{quickScenes.map((id) => { const item = SCENES.find((entry) => entry.id === id)!; return <button className={`quick-state ${scene === id ? 'selected' : ''} ${id === 'failed' ? 'error-state' : ''}`} key={id} onClick={() => selectScene(id)}><span className={`quick-state-symbol ${id}`}><Icon name={item.icon} size={15} /></span><span>{id === 'connected' ? '连接成功' : item.label}</span>{scene === id ? <Icon name="check" size={14} /> : <Icon name="arrowUpRight" size={13} />}</button>; })}</div>
-            <div className="flow-demo">{(currentScene.group === 'connection' || isManage || isForm) && <label><span>模拟连接结果</span><select aria-label="模拟连接结果" value={connectionOutcome} onChange={(event) => setConnectionOutcome(event.target.value as SimulationOutcome)}><option value="success">连接成功</option><option value="timeout">连接超时</option><option value="unreachable">服务器不可达</option><option value="invalid">响应格式无效</option><option value="version">API 版本不兼容</option><option value="http-error">HTTP 503</option></select></label>}{isDiscovery && <label><span>模拟发现结果</span><select aria-label="模拟发现结果" value={scanOutcome} onChange={(event) => setScanOutcome(event.target.value as 'found' | 'empty')}><option value="found">发现 2 台设备</option><option value="empty">未发现设备</option></select></label>}<button className="play-flow-button" onClick={runScenario}><Icon name="play" size={13} />{demoLabel}<Icon name="arrowRight" size={14} /></button></div>
+            <div className="flow-demo">{(currentScene.group === 'connection' || currentScene.group === 'reader' || isManage || isForm) && <label><span>模拟连接结果</span><select aria-label="模拟连接结果" value={connectionOutcome} onChange={(event) => setConnectionOutcome(event.target.value as SimulationOutcome)}><option value="success">连接成功</option><option value="timeout">连接超时</option><option value="unreachable">服务器不可达</option><option value="invalid">响应格式无效</option><option value="version">API 版本不兼容</option><option value="http-error">HTTP 503</option></select></label>}{isDiscovery && <label><span>模拟发现结果</span><select aria-label="模拟发现结果" value={scanOutcome} onChange={(event) => setScanOutcome(event.target.value as 'found' | 'empty')}><option value="found">发现 2 台设备</option><option value="empty">未发现设备</option></select></label>}<button className="play-flow-button" onClick={runScenario}><Icon name="play" size={13} />{demoLabel}<Icon name="arrowRight" size={14} /></button></div>
             <div className="simulation-controls">
+              {currentScene.group === 'reader' && <><label>模拟读卡数据<select aria-label="模拟读卡数据" value={readingFixture} onChange={e => setReadingFixture(e.target.value as typeof readingFixture)}><option value="success">已读取 Access Code</option><option value="identifier-only">仅标识 / 读取 Access Code 失败</option><option value="failed">读取失败</option><option value="unknown">另一张未绑定卡</option></select></label><label>模拟提交结果<select aria-label="模拟提交结果" value={submitOutcome} onChange={e => setSubmitOutcome(e.target.value as SubmitOutcome)}><option value="accepted">202 已接收</option><option value="busy">429 槽忙</option><option value="rejected">请求被拒绝</option><option value="unknown">超时 / 结果未知</option></select></label></>}
+
               <span data-testid="verification-count">模拟验证次数：{connection.validationCount}</span>
               {activeServer.mode === 'http' && <code>{infoRequest(activeServer).method} /amnet/info</code>}
               {connection.status === 'connected' && <button onClick={() => controller.remoteDisconnect()}>模拟检测到服务端断开</button>}
@@ -324,6 +339,6 @@ export default function App() {
         <footer className="workspace-footer"><span>LESS FRICTION. MORE CONNECTION.</span><span><kbd>←</kbd><kbd>→</kbd>切换场景</span></footer>
       </main>
     </div>
-    <AnimatePresence>{workbenchDialog && <motion.div className="workbench-dialog-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setWorkbenchDialog(null)}><motion.div className="workbench-dialog" ref={workbenchDialogRef} role="dialog" aria-modal="true" aria-labelledby="workbench-dialog-title" initial={{ opacity: 0, y: 15, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} onClick={(event) => event.stopPropagation()}><button className="dialog-close icon-button" aria-label="关闭对话框" onClick={() => setWorkbenchDialog(null)}><Icon name="close" size={18} /></button><span className="dialog-illustration"><Icon name={workbenchDialog === 'about' ? 'link' : 'reset'} size={28} /></span><h2 id="workbench-dialog-title">{workbenchDialog === 'about' ? '近联，让本地连接更简单' : '恢复原型的初始状态？'}</h2>{workbenchDialog === 'about' ? <><p>一个遵循 Material 3 的 Android 局域网连接原型，包含 {SCENES.length} 个可以独立打开的场景。</p><div className="about-details"><p><Icon name="smartphone" size={17} /><span>独立场景会停留，便于检查细节。点击播放流程或在交互预览中重新启动，可体验完整流程。</span></p><p><Icon name="scan" size={17} /><span>预置两台示例服务器，扫描与连接均为模拟。AMNet 文档未提供 WebSocket 或自动发现接口，这两部分仅作交互演示。</span></p><p><Icon name="shieldCheck" size={17} /><span>配置与设置保存在当前浏览器。默认按需验证；未来刷卡前再验证，刷卡不在本次范围。</span></p></div><AppButton onClick={() => setWorkbenchDialog(null)}>开始探索</AppButton></> : <><p>这会移除你在原型中添加或修改的配置，恢复两台示例服务器、自动连接偏好和初始场景。</p><p className="reset-hint">仅影响当前浏览器内的原型数据。</p><div className="dialog-actions"><AppButton kind="text" onClick={() => setWorkbenchDialog(null)}>取消</AppButton><AppButton onClick={resetPrototype}>确认重置</AppButton></div></>}</motion.div></motion.div>}</AnimatePresence>
+    <AnimatePresence>{workbenchDialog && <motion.div className="workbench-dialog-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setWorkbenchDialog(null)}><motion.div className="workbench-dialog" ref={workbenchDialogRef} role="dialog" aria-modal="true" aria-labelledby="workbench-dialog-title" initial={{ opacity: 0, y: 15, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} onClick={(event) => event.stopPropagation()}><button className="dialog-close icon-button" aria-label="关闭对话框" onClick={() => setWorkbenchDialog(null)}><Icon name="close" size={18} /></button><span className="dialog-illustration"><Icon name={workbenchDialog === 'about' ? 'link' : 'reset'} size={28} /></span><h2 id="workbench-dialog-title">{workbenchDialog === 'about' ? '近联，让本地连接更简单' : '恢复原型的初始状态？'}</h2>{workbenchDialog === 'about' ? <><p>一个遵循 Material 3 的 Android 局域网连接原型，包含 {SCENES.length} 个可以独立打开的场景。</p><div className="about-details"><p><Icon name="smartphone" size={17} /><span>独立场景会停留，便于检查细节。点击播放流程或在交互预览中重新启动，可体验完整流程。</span></p><p><Icon name="scan" size={17} /><span>预置两台示例服务器，扫描与连接均为模拟。AMNet 文档未提供 WebSocket 或自动发现接口，这两部分仅作交互演示。</span></p><p><Icon name="shieldCheck" size={17} /><span>配置与设置保存在当前浏览器。默认按需验证；刷卡与卡包发送前复用同一连接验证，提交和 NFC 均为模拟。</span></p></div><AppButton onClick={() => setWorkbenchDialog(null)}>开始探索</AppButton></> : <><p>这会清空卡包、绑定及保存询问记录，移除你在原型中添加或修改的连接配置，恢复两台示例服务器、自动连接偏好和初始场景。</p><p className="reset-hint">仅影响当前浏览器内的原型数据。</p><div className="dialog-actions"><AppButton kind="text" onClick={() => setWorkbenchDialog(null)}>取消</AppButton><AppButton onClick={resetPrototype}>确认重置</AppButton></div></>}</motion.div></motion.div>}</AnimatePresence>
   </div></MotionConfig>;
 }
