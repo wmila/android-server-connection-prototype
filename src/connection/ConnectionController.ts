@@ -38,7 +38,7 @@ export class ConnectionController {
   private onSuccess: (server: ServerConfig) => void;
   private timer: unknown;
   private request: AbortController | null = null;
-  private requestKind: 'connect' | 'poll' | 'recheck' | 'send' | null = null;
+  private requestKind: 'connect' | 'poll' | 'recheck' | null = null;
   private generation = 0;
   private retryAt = 0;
   private retryAttempt = 1;
@@ -64,23 +64,7 @@ export class ConnectionController {
     this.request = null;
     this.requestKind = null;
   }
-  dispose() { this.stop(); this.publish({ checking: false, status: 'disconnected' }); }
-  /** A send intent verifies once, sharing an existing check for this exact target. */
-  async verifyForSend(serverId: string): Promise<boolean> {
-    if (this.state.server?.id !== serverId || this.state.status !== 'connected') return false;
-    if (this.state.server.mode === 'ws') return true;
-    const generation = this.generation;
-    await new Promise<void>(resolve => {
-      const unsubscribe = this.subscribe(() => {
-        if (!this.state.checking || generation !== this.generation) { unsubscribe(); resolve(); }
-      });
-      if (!this.state.checking) {
-        this.clearTimer();
-        void this.check('send');
-      }
-    });
-    return generation === this.generation && this.state.server?.id === serverId && this.state.status === 'connected';
-  }
+  dispose() { this.stop(); }
   setPreferences(preferences: Preferences) {
     const old = this.preferences;
     this.preferences = normalizePreferences(preferences);
@@ -104,10 +88,6 @@ export class ConnectionController {
     this.stop();
     this.publish({ status: 'disconnected', stale: false, checking: false, countdown: 0 });
   }
-  clearServer() {
-    this.stop();
-    this.publish({ server: null, status: 'disconnected', checking: false, stale: false, countdown: 0, info: null, lastVerifiedAt: null });
-  }
   remoteDisconnect() {
     if (this.state.status !== 'connected') return;
     this.stop();
@@ -120,7 +100,7 @@ export class ConnectionController {
     this.clearTimer();
     void this.check('recheck');
   }
-  private async check(kind: 'connect' | 'poll' | 'recheck' | 'send') {
+  private async check(kind: 'connect' | 'poll' | 'recheck') {
     const server = this.state.server;
     if (!server || this.request) return;
     const generation = this.generation;
@@ -144,7 +124,7 @@ export class ConnectionController {
       this.publish({ status: kind === 'connect' && !this.recovering ? 'failed' : 'disconnected', checking: false, stale: false,
         error: error instanceof Error ? error.message : '服务器验证失败' });
       // An explicit stale-state retest is exactly one request, even if retries are enabled.
-      if (kind !== 'recheck' && kind !== 'send' && this.preferences.autoReconnect && (kind !== 'connect' || this.state.attempt < 3)) {
+      if (kind !== 'recheck' && this.preferences.autoReconnect && (kind !== 'connect' || this.state.attempt < 3)) {
         this.waitForRetry(kind === 'connect' ? this.state.attempt + 1 : 1);
       }
     }
